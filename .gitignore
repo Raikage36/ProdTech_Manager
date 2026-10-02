@@ -361,3 +361,9 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+# PyInstaller output (rebuild with: pyinstaller ProdTech_Manager.spec)
+/build/
+/dist/
+
+# Generated reports
+/reports/

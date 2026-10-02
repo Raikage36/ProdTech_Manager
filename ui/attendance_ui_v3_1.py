@@ -171,19 +171,24 @@ class AttendanceUI(tb.Frame):
 
         tb.Button(win, text="Save", bootstyle="success", command=save_record).pack(pady=10)
 
+    EDITABLE_COLUMNS = ("Date", "Status", "Reason")
+
     def start_inline_edit(self, event):
         region = self.table.identify("region", event.x, event.y)
         if region != "cell":
             return
-        row_id = self.table.identify_row(event.y)
-        col = self.table.identify_column(event.x)
-        if col == "#1":
-            return
+        self.edit_cell(self.table.identify_row(event.y), self.table.identify_column(event.x))
+
+    def edit_cell(self, row_id, col):
+        """Open an inline editor over one cell (col is a Treeview id like '#8')."""
         col_index = int(col.replace("#", "")) - 1
         col_name = self.table["columns"][col_index]
-        if col_name in ["Name", "Department", "Section", "Shift", "Employer"]:
+        if col_name not in self.EDITABLE_COLUMNS:
             return
-        x, y, width, height = self.table.bbox(row_id, col)
+        bbox = self.table.bbox(row_id, col)
+        if not bbox:  # cell scrolled out of view
+            return
+        x, y, width, height = bbox
         value = self.table.item(row_id, "values")[col_index]
         entry = tb.Entry(self.table)
         entry.insert(0, value)
@@ -204,21 +209,23 @@ class AttendanceUI(tb.Frame):
 
         entry.bind("<Return>", save_edit)
         entry.bind("<Escape>", lambda e: entry.destroy())
+        entry.bind("<FocusOut>", lambda e: entry.destroy())
 
     def show_context_menu(self, event):
         item = self.table.identify_row(event.y)
         if not item:
             return
         self.table.selection_set(item)
+        # Edit the clicked cell if it is editable, otherwise the Status cell
+        col = self.table.identify_column(event.x)
+        col_index = int(col.replace("#", "") or 0) - 1
+        if not 0 <= col_index < len(self.table["columns"]) or \
+                self.table["columns"][col_index] not in self.EDITABLE_COLUMNS:
+            col = "#" + str(self.table["columns"].index("Status") + 1)
         menu = tb.Menu(self, tearoff=0)
-        menu.add_command(label="✏️ Edit Record", command=self.inline_edit_from_menu)
+        menu.add_command(label="✏️ Edit Record", command=lambda: self.edit_cell(item, col))
         menu.add_command(label="🗑️ Delete Record", command=self.delete_record)
         menu.tk_popup(event.x_root, event.y_root)
-
-    def inline_edit_from_menu(self):
-        selection = self.table.selection()
-        if selection:
-            self.start_inline_edit(event=None)
 
     def delete_record(self):
         sel = self.table.selection()
@@ -289,6 +296,8 @@ class AttendanceUI(tb.Frame):
             return
 
         data = pd.DataFrame(df, columns=["Shift", "Status"])
+        # Blank shifts/statuses would otherwise be dropped and leave nothing to plot
+        data = data.replace("", None).fillna({"Shift": "Unassigned", "Status": "Unknown"})
 
         # Pie chart for status distribution
         fig = Figure(figsize=(10, 4))
