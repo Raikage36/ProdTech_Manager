@@ -17,7 +17,7 @@ Handles:
 """
 
 import sqlite3
-from contextlib import closing
+from contextlib import closing, contextmanager
 
 # ---------------------------------------------------------
 # Database Configuration
@@ -31,25 +31,39 @@ def connect():
     """Create a new connection to the database."""
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA foreign_keys = ON;")
-    print(f"🗄 Using DB file: {DB_PATH}")
     return conn
+
+@contextmanager
+def transaction():
+    """Yield a connection that commits on success, rolls back on error, and always closes."""
+    with closing(connect()) as conn:
+        with conn:
+            yield conn
 
 def execute_query(query, params=()):
     """Execute a query with optional parameters (INSERT, UPDATE, DELETE)."""
     try:
-        with connect() as conn:
+        with transaction() as conn:
             conn.execute(query, params)
-            conn.commit()
     except sqlite3.Error as e:
         print(f"[DB ERROR] {e}")
         raise
 
+def execute_many(query, seq_of_params):
+    """Execute a query for each parameter tuple in a single transaction."""
+    try:
+        with transaction() as conn:
+            conn.executemany(query, seq_of_params)
+    except sqlite3.Error as e:
+        print(f"[DB ERROR] {e}")
+        raise
+
+insert_many = execute_many
+
 def fetch_all(query, params=()):
     """Fetch all rows from a SELECT query."""
     with closing(connect()) as conn:
-        cur = conn.cursor()
-        cur.execute(query, params)
-        return cur.fetchall()
+        return conn.execute(query, params).fetchall()
 
 # ---------------------------------------------------------
 # Schema Migration
@@ -57,7 +71,7 @@ def fetch_all(query, params=()):
 def migrate_database():
     """Create or update all required tables and columns."""
     try:
-        with connect() as conn:
+        with transaction() as conn:
             cur = conn.cursor()
 
             # =========================================================
@@ -155,9 +169,7 @@ def migrate_database():
                 )
             """)
 
-            conn.commit()
-            print("✅ Database migration completed successfully.")
-            print(fetch_all("SELECT name FROM sqlite_master WHERE type='table';"))
+        print(f"✅ Database migration completed successfully ({DB_PATH}).")
 
     except sqlite3.Error as e:
         print(f"❌ Migration failed: {e}")

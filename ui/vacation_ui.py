@@ -19,7 +19,7 @@ from ttkbootstrap.constants import *
 from datetime import datetime
 
 from modules import vacation_logic
-from modules.database_manager import get_agents
+from modules.database_manager import fetch_all, get_agents
 
 class VacationUI(tb.Frame):
     def __init__(self, parent):
@@ -102,19 +102,17 @@ class VacationUI(tb.Frame):
     # ---------------------------------------------------------
     def populate_table(self):
         """Load vacation data into the tree."""
-        for i in self.tree.get_children():
-            self.tree.delete(i)
+        self.tree.delete(*self.tree.get_children())
 
-        vacations = vacation_logic.get_all_vacations()
-        agents = {a[0]: a[1] for a in get_agents()}  # id -> name map
-
-        for vac in vacations:
-            vac_id, agent_id, start_date, end_date, total_days, days_used, status, reason = vac
-            self.tree.insert(
-                "",
-                END,
-                values=(vac_id, agent_id, agents.get(agent_id, "Unknown"), start_date, end_date, total_days, days_used, status, reason)
-            )
+        rows = fetch_all("""
+            SELECT v.id, v.agent_id, COALESCE(a.name, 'Unknown'), v.start_date, v.end_date,
+                   v.total_days, v.days_used, v.status, v.reason
+            FROM vacations v
+            LEFT JOIN agents a ON a.id = v.agent_id
+            ORDER BY v.start_date DESC
+        """)
+        for row in rows:
+            self.tree.insert("", END, values=row)
 
     def search_vacation(self):
         """Search vacations by agent name."""

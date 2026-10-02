@@ -4,7 +4,10 @@ import pandas as pd
 import ttkbootstrap as tb
 from ttkbootstrap.constants import *
 from tkinter import filedialog, messagebox, simpledialog
-from modules.database_manager import execute_query, fetch_all
+from modules.database_manager import transaction
+
+COLUMNS = ["ID", "Name", "Department", "Section", "Shift", "Roster Type",
+           "Job Title", "Email", "Phone Num", "Employer"]
 
 class AgentsUI(tb.Frame):
     def __init__(self, parent):
@@ -34,10 +37,8 @@ class AgentsUI(tb.Frame):
             tb.Button(ribbon, text=txt, bootstyle="secondary", command=cmd).pack(side=LEFT, padx=5, pady=3)
 
         # Table
-        cols = ["ID", "Name", "Department", "Section", "Shift", "Roster Type",
-                "Job Title", "Email", "Phone Num", "Employer"]
-        self.table = tb.Treeview(self, columns=cols, show="headings", height=20)
-        for c in cols:
+        self.table = tb.Treeview(self, columns=COLUMNS, show="headings", height=20)
+        for c in COLUMNS:
             self.table.heading(c, text=c)
             self.table.column(c, width=150, anchor="center")
         self.table.pack(fill=BOTH, expand=True, padx=15, pady=10)
@@ -54,17 +55,12 @@ class AgentsUI(tb.Frame):
             return
         try:
             df = pd.read_excel(path)
-            required_cols = ["ID", "Name", "Department", "Section", "Shift", "Roster Type",
-                             "Email", "Phone Num", "Employer"]
-            for col in required_cols:
+            for col in COLUMNS:
                 if col not in df.columns:
                     df[col] = ""
-            if "Job Title" not in df.columns:
-                df["Job Title"] = ""
 
             self.master_file = path
-            self.df = df[["ID", "Name", "Department", "Section", "Shift", "Roster Type",
-                          "Job Title", "Email", "Phone Num", "Employer"]]
+            self.df = df[COLUMNS].reset_index(drop=True)
             self.refresh_table()
             messagebox.showinfo("Master File Loaded", f"{len(self.df)} agents imported.")
         except Exception as e:
@@ -72,12 +68,13 @@ class AgentsUI(tb.Frame):
 
     # ---------------- Table Refresh ----------------
     def refresh_table(self):
-        for r in self.table.get_children():
-            self.table.delete(r)
-        if self.df.empty:
-            return
-        for _, row in self.df.iterrows():
-            self.table.insert("", "end", values=row.tolist())
+        self.show_rows(self.df)
+
+    def show_rows(self, df):
+        """Fill the table; each row's iid is its DataFrame index so edits/deletes map back exactly."""
+        self.table.delete(*self.table.get_children())
+        for idx, values in zip(df.index, df.to_numpy().tolist()):
+            self.table.insert("", "end", iid=str(idx), values=values)
 
     # ---------------- Editing ----------------
     def on_double_click(self, event):
@@ -94,14 +91,12 @@ class AgentsUI(tb.Frame):
             vals[col_index] = new_value
             self.table.item(item_id, values=vals)
             # Update DataFrame
-            row_index = self.table.index(item_id)
-            self.df.at[row_index, col_name] = new_value
+            self.df.at[int(item_id), col_name] = new_value
 
     # ---------------- Add / Delete ----------------
     def add_agent(self):
         new_data = {}
-        for field in ["Name", "Department", "Section", "Shift", "Roster Type",
-                      "Job Title", "Email", "Phone Num", "Employer"]:
+        for field in COLUMNS[1:]:
             val = simpledialog.askstring("New Agent", f"Enter {field}:")
             new_data[field] = val if val else ""
         new_id = self.df["ID"].max() + 1 if not self.df.empty else 1
@@ -117,10 +112,8 @@ class AgentsUI(tb.Frame):
         confirm = messagebox.askyesno("Confirm Delete", "Are you sure you want to delete the selected agent(s)?")
         if not confirm:
             return
-        for sel in selected:
-            vals = self.table.item(sel, "values")
-            self.df = self.df[self.df["ID"] != vals[0]]
-            self.table.delete(sel)
+        self.df = self.df.drop(index=[int(sel) for sel in selected])
+        self.table.delete(*selected)
 
     # ---------------- Search ----------------
     def search_agent(self):
@@ -128,10 +121,9 @@ class AgentsUI(tb.Frame):
         if not term:
             return
         term = term.lower()
-        filtered = self.df[self.df.apply(lambda row: row.astype(str).str.lower().str.contains(term).any(), axis=1)]
-        self.table.delete(*self.table.get_children())
-        for _, row in filtered.iterrows():
-            self.table.insert("", "end", values=row.tolist())
+        text = self.df.astype(str).apply(lambda col: col.str.lower())
+        mask = text.apply(lambda col: col.str.contains(term, regex=False)).any(axis=1)
+        self.show_rows(self.df[mask])
 
     # ---------------- Save Changes ----------------
     def save_changes(self):
@@ -144,24 +136,24 @@ class AgentsUI(tb.Frame):
         try:
             # Save to Excel
             self.df.to_excel(self.master_file, index=False)
-            # Sync to database
-            execute_query("DELETE FROM agents")
-            for _, row in self.df.iterrows():
-                execute_query("""
+            # Sync to database in one transaction (all-or-nothing)
+            data = self.df[COLUMNS].astype(object)
+            data = data.where(data.notna(), None)
+            rows = [(int(r[0]), *r[1:]) for r in data.itertuples(index=False, name=None)]
+            # Upsert instead of DELETE-all, which the foreign keys reject once agents have records
+            with transaction() as conn:
+                conn.executemany("""
                     INSERT INTO agents (id, name, department, section, shift_type, roster_type, job_title, email, phone, employer)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    int(row["ID"]),
-                    row["Name"],
-                    row["Department"],
-                    row["Section"],
-                    row["Shift"],
-                    row["Roster Type"],
-                    row["Job Title"],
-                    row["Email"],
-                    row["Phone Num"],
-                    row["Employer"],
-                ))
+                    ON CONFLICT(id) DO UPDATE SET
+                        name = excluded.name, department = excluded.department, section = excluded.section,
+                        shift_type = excluded.shift_type, roster_type = excluded.roster_type,
+                        job_title = excluded.job_title, email = excluded.email, phone = excluded.phone,
+                        employer = excluded.employer
+                """, rows)
+                conn.execute("CREATE TEMP TABLE keep_ids (id INTEGER PRIMARY KEY)")
+                conn.executemany("INSERT OR IGNORE INTO keep_ids VALUES (?)", [(r[0],) for r in rows])
+                conn.execute("DELETE FROM agents WHERE id NOT IN (SELECT id FROM keep_ids)")
             messagebox.showinfo("Saved", "All changes saved to Excel and database successfully.")
         except Exception as e:
             messagebox.showerror("Error", f"Could not save data:\n{e}")

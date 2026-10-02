@@ -1,13 +1,13 @@
 ﻿# ui/attendance_ui.py
 import os
 import pandas as pd
-import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
 import ttkbootstrap as tb
 from ttkbootstrap.constants import *
 from tkinter import filedialog, messagebox, StringVar
 from datetime import datetime
-from modules.database_manager import execute_query, fetch_all
+from modules.database_manager import execute_many, execute_query, fetch_all
 from ttkbootstrap.toast import ToastNotification
 from modules import report_generator
 
@@ -18,7 +18,6 @@ class AttendanceUI(tb.Frame):
         self.df = pd.DataFrame()
         self.create_widgets()
         self.refresh_table()
-        self.refresh_charts()
 
     # -----------------------------------------------------------
     # 🧱 LAYOUT
@@ -97,14 +96,11 @@ class AttendanceUI(tb.Frame):
         self.chart_frame = tb.Frame(self.insights_tab)
         self.chart_frame.pack(fill=BOTH, expand=True, padx=10, pady=10)
 
-        self.refresh_charts()
-
     # -----------------------------------------------------------
     # CRUD FUNCTIONS
     # -----------------------------------------------------------
     def refresh_table(self):
-        for row in self.table.get_children():
-            self.table.delete(row)
+        self.table.delete(*self.table.get_children())
 
         rows = fetch_all("""
             SELECT att.id, a.name, a.department, a.section, a.shift_type,
@@ -175,19 +171,24 @@ class AttendanceUI(tb.Frame):
 
         tb.Button(win, text="Save", bootstyle="success", command=save_record).pack(pady=10)
 
+    EDITABLE_COLUMNS = ("Date", "Status", "Reason")
+
     def start_inline_edit(self, event):
         region = self.table.identify("region", event.x, event.y)
         if region != "cell":
             return
-        row_id = self.table.identify_row(event.y)
-        col = self.table.identify_column(event.x)
-        if col == "#1":
-            return
+        self.edit_cell(self.table.identify_row(event.y), self.table.identify_column(event.x))
+
+    def edit_cell(self, row_id, col):
+        """Open an inline editor over one cell (col is a Treeview id like '#8')."""
         col_index = int(col.replace("#", "")) - 1
         col_name = self.table["columns"][col_index]
-        if col_name in ["Name", "Department", "Section", "Shift", "Employer"]:
+        if col_name not in self.EDITABLE_COLUMNS:
             return
-        x, y, width, height = self.table.bbox(row_id, col)
+        bbox = self.table.bbox(row_id, col)
+        if not bbox:  # cell scrolled out of view
+            return
+        x, y, width, height = bbox
         value = self.table.item(row_id, "values")[col_index]
         entry = tb.Entry(self.table)
         entry.insert(0, value)
@@ -208,21 +209,23 @@ class AttendanceUI(tb.Frame):
 
         entry.bind("<Return>", save_edit)
         entry.bind("<Escape>", lambda e: entry.destroy())
+        entry.bind("<FocusOut>", lambda e: entry.destroy())
 
     def show_context_menu(self, event):
         item = self.table.identify_row(event.y)
         if not item:
             return
         self.table.selection_set(item)
+        # Edit the clicked cell if it is editable, otherwise the Status cell
+        col = self.table.identify_column(event.x)
+        col_index = int(col.replace("#", "") or 0) - 1
+        if not 0 <= col_index < len(self.table["columns"]) or \
+                self.table["columns"][col_index] not in self.EDITABLE_COLUMNS:
+            col = "#" + str(self.table["columns"].index("Status") + 1)
         menu = tb.Menu(self, tearoff=0)
-        menu.add_command(label="✏️ Edit Record", command=self.inline_edit_from_menu)
+        menu.add_command(label="✏️ Edit Record", command=lambda: self.edit_cell(item, col))
         menu.add_command(label="🗑️ Delete Record", command=self.delete_record)
         menu.tk_popup(event.x_root, event.y_root)
-
-    def inline_edit_from_menu(self):
-        selection = self.table.selection()
-        if selection:
-            self.start_inline_edit(event=None)
 
     def delete_record(self):
         sel = self.table.selection()
@@ -247,14 +250,19 @@ class AttendanceUI(tb.Frame):
         if not path:
             return
         df = pd.read_excel(path)
-        for _, row in df.iterrows():
-            name, date, status, reason = row["Name"], row["Date"], row["Status"], row["Reason"]
-            agent = fetch_all("SELECT id FROM agents WHERE name=?", (name,))
-            if agent:
-                execute_query(
-                    "INSERT INTO attendance (agent_id, date, status, reason) VALUES (?, ?, ?, ?)",
-                    (agent[0][0], str(date)[:10], status, reason),
-                )
+        # One lookup of all agents instead of a query per row; first match wins like before
+        agent_ids = {}
+        for agent_id, name in fetch_all("SELECT id, name FROM agents ORDER BY id"):
+            agent_ids.setdefault(name, agent_id)
+        records = [
+            (agent_ids[name], str(date)[:10], status, reason)
+            for name, date, status, reason in zip(df["Name"], df["Date"], df["Status"], df["Reason"])
+            if name in agent_ids
+        ]
+        execute_many(
+            "INSERT INTO attendance (agent_id, date, status, reason) VALUES (?, ?, ?, ?)",
+            records,
+        )
         self.refresh_table()
         ToastNotification(title="Imported", message="Attendance imported successfully.").show_toast()
 
@@ -288,9 +296,12 @@ class AttendanceUI(tb.Frame):
             return
 
         data = pd.DataFrame(df, columns=["Shift", "Status"])
+        # Blank shifts/statuses would otherwise be dropped and leave nothing to plot
+        data = data.replace("", None).fillna({"Shift": "Unassigned", "Status": "Unknown"})
 
         # Pie chart for status distribution
-        fig, axs = plt.subplots(1, 2, figsize=(10, 4))
+        fig = Figure(figsize=(10, 4))
+        axs = fig.subplots(1, 2)
         status_counts = data["Status"].value_counts()
         axs[0].pie(status_counts, labels=status_counts.index, autopct="%1.1f%%", startangle=90)
         axs[0].set_title("Attendance Status Distribution")
@@ -302,7 +313,7 @@ class AttendanceUI(tb.Frame):
         axs[1].set_xlabel("Shift")
         axs[1].set_ylabel("Count")
 
-        plt.tight_layout()
+        fig.tight_layout()
 
         canvas = FigureCanvasTkAgg(fig, master=self.chart_frame)
         canvas.draw()

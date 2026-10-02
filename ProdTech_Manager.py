@@ -26,6 +26,14 @@ class ProdTechManager(tb.Window):
 
         self.active_frame = None
         self.frames = {}
+        # Screens are built on first visit so startup only pays for the Dashboard
+        self.frame_classes = {
+            "Dashboard": DashboardUI,
+            "Agents": AgentsUI,
+            "Attendance": AttendanceUI,
+            "Vacation": VacationUI,
+            "Disciplinary": DisciplinaryUI,
+        }
 
         self.setup_ui()
 
@@ -66,15 +74,8 @@ class ProdTechManager(tb.Window):
         # Main Content Area
         self.main_frame = tb.Frame(self, bootstyle="dark")
         self.main_frame.pack(side=LEFT, fill=BOTH, expand=True)
-
-        # Initialize All Modules
-        self.frames = {
-            "Dashboard": DashboardUI(self.main_frame),
-            "Agents": AgentsUI(self.main_frame),
-            "Attendance": AttendanceUI(self.main_frame),
-            "Vacation": VacationUI(self.main_frame),
-            "Disciplinary": DisciplinaryUI(self.main_frame),
-        }
+        self.main_frame.rowconfigure(0, weight=1)
+        self.main_frame.columnconfigure(0, weight=1)
 
         # Start on Dashboard
         self.switch_frame("Dashboard")
@@ -87,22 +88,19 @@ class ProdTechManager(tb.Window):
             self.confirm_exit()
             return
 
-        # Hide previous frame
-        if self.active_frame:
-            try:
-                self.active_frame.grid_forget()
-            except Exception:
-                self.active_frame.pack_forget()
-
-        # Show new one
         frame = self.frames.get(name)
-        if frame:
-            # Place using grid to avoid mixing geometry managers across siblings
-            try:
-                frame.grid(row=0, column=0, sticky="nsew")
-            except Exception:
-                frame.pack(fill=BOTH, expand=True)
-            self.active_frame = frame
+        if frame is None:
+            frame_class = self.frame_classes.get(name)
+            if frame_class is None:
+                return  # Not implemented yet (e.g. Forms): keep the current screen
+            frame = self.frames[name] = frame_class(self.main_frame)
+
+        if frame is self.active_frame:
+            return
+        if self.active_frame:
+            self.active_frame.grid_remove()
+        frame.grid(row=0, column=0, sticky="nsew")
+        self.active_frame = frame
 
     # ----------------------------------------------------------
     # 🚪 Exit Confirmation

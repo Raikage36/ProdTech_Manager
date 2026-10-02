@@ -46,7 +46,28 @@ def export_attendance_excel(month_name="December 2025"):
 # --------------------------
 # Utility: Save PDF Reports
 # --------------------------
+def _latin1(text):
+    """The built-in PDF fonts only cover Latin-1; swap or replace anything else."""
+    text = str(text).replace("—", "-").replace("–", "-").replace("•", "-")
+    return text.encode("latin-1", "replace").decode("latin-1")
+
+def _clean_text_args(args, kwargs):
+    if len(args) >= 3:
+        args = (*args[:2], _latin1(args[2]), *args[3:])
+    for key in ("txt", "text"):
+        if key in kwargs:
+            kwargs[key] = _latin1(kwargs[key])
+    return args, kwargs
+
 class PDFReport(FPDF):
+    def cell(self, *args, **kwargs):
+        args, kwargs = _clean_text_args(args, kwargs)
+        return super().cell(*args, **kwargs)
+
+    def multi_cell(self, *args, **kwargs):
+        args, kwargs = _clean_text_args(args, kwargs)
+        return super().multi_cell(*args, **kwargs)
+
     def header(self):
         # Logo
         if os.path.exists(LOGO_PATH):

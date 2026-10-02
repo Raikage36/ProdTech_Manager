@@ -1,0 +1,14 @@
+# Runtime dependencies for ProdTech Manager (Python 3.12)
+# Install with: pip install -r requirements.txt
+
+# 2.x removed ttkbootstrap.toast, which the Attendance screen uses
+ttkbootstrap>=1.10,<2
+pandas>=2.0
+matplotlib>=3.8
+# Excel read/write (.xlsx); xlrd is only needed for legacy .xls files
+openpyxl>=3.1
+xlrd>=2.0
+# PDF reports (the maintained fpdf2 also works as a drop-in replacement)
+fpdf==1.7.2
+
+# To build the .exe: pip install pyinstaller && pyinstaller ProdTech_Manager.spec
