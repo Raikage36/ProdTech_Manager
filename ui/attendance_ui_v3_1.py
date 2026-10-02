@@ -1,13 +1,13 @@
 ﻿# ui/attendance_ui.py
 import os
 import pandas as pd
-import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
 import ttkbootstrap as tb
 from ttkbootstrap.constants import *
 from tkinter import filedialog, messagebox, StringVar
 from datetime import datetime
-from modules.database_manager import execute_query, fetch_all
+from modules.database_manager import execute_many, execute_query, fetch_all
 from ttkbootstrap.toast import ToastNotification
 from modules import report_generator
 
@@ -18,7 +18,6 @@ class AttendanceUI(tb.Frame):
         self.df = pd.DataFrame()
         self.create_widgets()
         self.refresh_table()
-        self.refresh_charts()
 
     # -----------------------------------------------------------
     # 🧱 LAYOUT
@@ -97,14 +96,11 @@ class AttendanceUI(tb.Frame):
         self.chart_frame = tb.Frame(self.insights_tab)
         self.chart_frame.pack(fill=BOTH, expand=True, padx=10, pady=10)
 
-        self.refresh_charts()
-
     # -----------------------------------------------------------
     # CRUD FUNCTIONS
     # -----------------------------------------------------------
     def refresh_table(self):
-        for row in self.table.get_children():
-            self.table.delete(row)
+        self.table.delete(*self.table.get_children())
 
         rows = fetch_all("""
             SELECT att.id, a.name, a.department, a.section, a.shift_type,
@@ -247,14 +243,19 @@ class AttendanceUI(tb.Frame):
         if not path:
             return
         df = pd.read_excel(path)
-        for _, row in df.iterrows():
-            name, date, status, reason = row["Name"], row["Date"], row["Status"], row["Reason"]
-            agent = fetch_all("SELECT id FROM agents WHERE name=?", (name,))
-            if agent:
-                execute_query(
-                    "INSERT INTO attendance (agent_id, date, status, reason) VALUES (?, ?, ?, ?)",
-                    (agent[0][0], str(date)[:10], status, reason),
-                )
+        # One lookup of all agents instead of a query per row; first match wins like before
+        agent_ids = {}
+        for agent_id, name in fetch_all("SELECT id, name FROM agents ORDER BY id"):
+            agent_ids.setdefault(name, agent_id)
+        records = [
+            (agent_ids[name], str(date)[:10], status, reason)
+            for name, date, status, reason in zip(df["Name"], df["Date"], df["Status"], df["Reason"])
+            if name in agent_ids
+        ]
+        execute_many(
+            "INSERT INTO attendance (agent_id, date, status, reason) VALUES (?, ?, ?, ?)",
+            records,
+        )
         self.refresh_table()
         ToastNotification(title="Imported", message="Attendance imported successfully.").show_toast()
 
@@ -290,7 +291,8 @@ class AttendanceUI(tb.Frame):
         data = pd.DataFrame(df, columns=["Shift", "Status"])
 
         # Pie chart for status distribution
-        fig, axs = plt.subplots(1, 2, figsize=(10, 4))
+        fig = Figure(figsize=(10, 4))
+        axs = fig.subplots(1, 2)
         status_counts = data["Status"].value_counts()
         axs[0].pie(status_counts, labels=status_counts.index, autopct="%1.1f%%", startangle=90)
         axs[0].set_title("Attendance Status Distribution")
@@ -302,7 +304,7 @@ class AttendanceUI(tb.Frame):
         axs[1].set_xlabel("Shift")
         axs[1].set_ylabel("Count")
 
-        plt.tight_layout()
+        fig.tight_layout()
 
         canvas = FigureCanvasTkAgg(fig, master=self.chart_frame)
         canvas.draw()

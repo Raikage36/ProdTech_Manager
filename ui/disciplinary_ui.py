@@ -6,7 +6,7 @@ from tkinter import messagebox
 from datetime import datetime
 from modules.database_manager import fetch_all, execute_query
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
 from collections import Counter
 
 class DisciplinaryUI(tb.Frame):
@@ -111,15 +111,14 @@ class DisciplinaryUI(tb.Frame):
                 "FROM disciplinary d JOIN agents a ON d.agent_id = a.id ORDER BY d.incident_date DESC"
             )
 
-            for r in self.table.get_children():
-                self.table.delete(r)
+            self.table.delete(*self.table.get_children())
             for row in rows:
                 self.table.insert("", "end", values=row)
 
             # Update summaries
             total = len(rows)
             self.summary_labels["Total Cases"].config(text=str(total))
-            counts = Counter([r[3] for r in rows])
+            counts = Counter(r[3] for r in rows)
             self.summary_labels["Warnings"].config(text=str(counts.get("Warning", 0)))
             self.summary_labels["Suspensions"].config(text=str(counts.get("Suspension", 0)))
             self.summary_labels["Terminations"].config(text=str(counts.get("Termination", 0)))
@@ -140,7 +139,8 @@ class DisciplinaryUI(tb.Frame):
         labels = list(counts.keys())
         sizes = list(counts.values())
 
-        fig, ax = plt.subplots(figsize=(4.5, 2.5), dpi=100)
+        fig = Figure(figsize=(4.5, 2.5), dpi=100)
+        ax = fig.add_subplot()
         ax.pie(
             sizes,
             labels=labels,

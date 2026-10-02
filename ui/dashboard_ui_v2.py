@@ -2,8 +2,7 @@
 import ttkbootstrap as tb
 from ttkbootstrap.constants import *
 from modules.database_manager import fetch_all
-from collections import Counter
-import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 class DashboardUI(tb.Frame):
@@ -52,8 +51,7 @@ class DashboardUI(tb.Frame):
 
     # ------------------- Summary Cards -------------------
     def update_summary(self):
-        agents = fetch_all("SELECT COUNT(*) FROM agents")[0][0]
-        departments = fetch_all("SELECT COUNT(DISTINCT department) FROM agents")[0][0]
+        agents, departments = fetch_all("SELECT COUNT(*), COUNT(DISTINCT department) FROM agents")[0]
 
         attendance_counts = dict(fetch_all("SELECT status, COUNT(*) FROM attendance GROUP BY status"))
         present = attendance_counts.get("Present", 0)
@@ -72,11 +70,12 @@ class DashboardUI(tb.Frame):
             w.destroy()
 
         # Job Title Distribution
-        jt_data = fetch_all("SELECT job_title FROM agents WHERE job_title != ''")
+        jt_data = fetch_all("SELECT job_title, COUNT(*) FROM agents WHERE job_title != '' GROUP BY job_title")
         if jt_data:
-            jt_counts = Counter([j[0] for j in jt_data])
-            fig, ax = plt.subplots(figsize=(4, 3))
-            ax.bar(jt_counts.keys(), jt_counts.values(), color="#007bff")
+            titles, counts = zip(*jt_data)
+            fig = Figure(figsize=(4, 3))
+            ax = fig.add_subplot()
+            ax.bar(titles, counts, color="#007bff")
             ax.set_title("Job Title Distribution")
             ax.tick_params(axis='x', rotation=45)
             fig.patch.set_facecolor("#f8f9fa")
@@ -86,11 +85,12 @@ class DashboardUI(tb.Frame):
             canvas.get_tk_widget().pack(side=LEFT, fill=BOTH, expand=True, padx=5)
 
         # Shift Distribution
-        shift_data = fetch_all("SELECT shift_type FROM agents WHERE shift_type != ''")
+        shift_data = fetch_all("SELECT shift_type, COUNT(*) FROM agents WHERE shift_type != '' GROUP BY shift_type")
         if shift_data:
-            shifts = Counter([s[0] for s in shift_data])
-            fig, ax = plt.subplots(figsize=(4, 3))
-            ax.pie(shifts.values(), labels=shifts.keys(), startangle=90)
+            shifts, counts = zip(*shift_data)
+            fig = Figure(figsize=(4, 3))
+            ax = fig.add_subplot()
+            ax.pie(counts, labels=shifts, startangle=90)
             ax.set_title("Shift Dominance Overview")
             fig.patch.set_facecolor("#f8f9fa")
             ax.set_facecolor("#f8f9fa")
@@ -103,7 +103,8 @@ class DashboardUI(tb.Frame):
         if trend_data:
             dates = [t[0] for t in trend_data]
             counts = [t[1] for t in trend_data]
-            fig, ax = plt.subplots(figsize=(4, 3))
+            fig = Figure(figsize=(4, 3))
+            ax = fig.add_subplot()
             ax.plot(dates, counts, marker="o", color="#28a745")
             ax.set_title("Attendance Trend (3-Month Cycle)")
             ax.set_xlabel("Date")
@@ -117,8 +118,7 @@ class DashboardUI(tb.Frame):
 
     # ------------------- Disciplinary -------------------
     def load_recent_disciplinary(self):
-        for r in self.table.get_children():
-            self.table.delete(r)
+        self.table.delete(*self.table.get_children())
         rows = fetch_all("""
             SELECT a.name, d.incident_date, d.reason, d.action_taken
             FROM disciplinary d
@@ -128,22 +128,3 @@ class DashboardUI(tb.Frame):
         """)
         for r in rows:
             self.table.insert("", "end", values=r)
-
-    # Vacation Query Example (To be integrated as needed)
-    def example_vacation_query(self):
-        query = """
-            SELECT a.shift_type, v.status, v.total_days, v.balance_days
-            FROM vacations v
-            JOIN agents a ON a.id = v.agent_id
-        """
-
-        # Pour inspecter la table depuis Python (optionnel)
-        # schema_info = fetch_all("PRAGMA table_info(vacations)")
-        # create_sql = fetch_all("SELECT sql FROM sqlite_master WHERE name='vacations'")
-
-        # Corriger insert_vacation pour utiliser la bonne table
-        def insert_vacation(agent_id, start_date, end_date, total_days, status, reason):
-            execute_query("""
-                INSERT INTO vacations (agent_id, start_date, end_date, total_days, status, reason)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (agent_id, start_date, end_date, total_days, status, reason))
